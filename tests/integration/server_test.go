@@ -61,14 +61,27 @@ func TestServerSetup(t *testing.T) {
 		
 		server.ServeHTTP(rec, req)
 		
-		assert.Equal(t, http.StatusOK, rec.Code)
+		// Without database connection, health check should return 503
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 		
 		var response map[string]interface{}
 		err := json.Unmarshal(rec.Body.Bytes(), &response)
 		require.NoError(t, err)
 		
-		assert.Equal(t, "healthy", response["status"])
+		// Without database, status should be unhealthy
+		assert.Equal(t, "unhealthy", response["status"])
 		assert.Equal(t, "dbackup-api", response["service"])
+		assert.Equal(t, "1.0.0", response["version"])
+		assert.NotNil(t, response["timestamp"])
+		
+		// Verify database check exists and is unhealthy
+		checks, ok := response["checks"].(map[string]interface{})
+		assert.True(t, ok)
+		
+		dbCheck, ok := checks["database"].(map[string]interface{})
+		assert.True(t, ok)
+		assert.Equal(t, "unhealthy", dbCheck["status"])
+		assert.NotNil(t, dbCheck["error"])
 	})
 
 	t.Run("API root endpoint returns correct response", func(t *testing.T) {

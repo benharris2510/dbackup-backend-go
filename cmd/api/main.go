@@ -8,9 +8,13 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/dbackup/backend-go/internal/auth"
 	"github.com/dbackup/backend-go/internal/config"
+	"github.com/dbackup/backend-go/internal/database"
 	"github.com/dbackup/backend-go/internal/handlers"
 	"github.com/dbackup/backend-go/internal/middleware"
+	"github.com/dbackup/backend-go/internal/routes"
+	"github.com/dbackup/backend-go/internal/validation"
 	"github.com/labstack/echo/v4"
 	echoMiddleware "github.com/labstack/echo/v4/middleware"
 )
@@ -23,6 +27,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize database
+	if err := database.Initialize(cfg); err != nil {
+		fmt.Printf("Failed to initialize database: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			fmt.Printf("Error closing database: %v\n", err)
+		}
+	}()
+
 	e := echo.New()
 
 	// Hide Echo banner
@@ -31,11 +46,23 @@ func main() {
 	// Configure Echo
 	e.Debug = cfg.IsDevelopment()
 
+	// Set up validator
+	e.Validator = validation.NewValidator()
+
+	// Initialize auth components
+	jwtManager := auth.NewJWTManager(
+		cfg.JWT.SecretKey,
+		cfg.JWT.AccessTokenExpires,
+		cfg.JWT.RefreshTokenExpires,
+	)
+	passwordHasher := auth.NewPasswordHasher()
+	totpManager := auth.NewTOTPManager("dbackup")
+
 	// Setup middleware
 	setupMiddleware(e, cfg)
 
 	// Setup routes
-	setupRoutes(e)
+	setupRoutes(e, jwtManager, passwordHasher, totpManager)
 
 	// Start server with graceful shutdown
 	go func() {
@@ -81,7 +108,7 @@ func setupMiddleware(e *echo.Echo, cfg *config.Config) {
 	e.Use(middleware.SecurityHeaders())
 }
 
-func setupRoutes(e *echo.Echo) {
+func setupRoutes(e *echo.Echo, jm *auth.JWTManager, ph *auth.PasswordHasher, tm *auth.TOTPManager) {
 	// Health check
 	e.GET("/health", handlers.HealthCheck)
 
@@ -95,4 +122,10 @@ func setupRoutes(e *echo.Echo) {
 			"status":  "operational",
 		})
 	})
+
+	// Database stats endpoint (for monitoring)
+	api.GET("/db/stats", handlers.DatabaseStats)
+
+	// Setup authentication routes
+	routes.SetupAuthRoutes(e, jm, ph, tm)
 }
