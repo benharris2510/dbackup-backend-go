@@ -11,6 +11,7 @@ import (
 	"github.com/dbackup/backend-go/internal/auth"
 	"github.com/dbackup/backend-go/internal/config"
 	"github.com/dbackup/backend-go/internal/database"
+	"github.com/dbackup/backend-go/internal/encryption"
 	"github.com/dbackup/backend-go/internal/handlers"
 	"github.com/dbackup/backend-go/internal/middleware"
 	"github.com/dbackup/backend-go/internal/routes"
@@ -58,11 +59,14 @@ func main() {
 	passwordHasher := auth.NewPasswordHasher()
 	totpManager := auth.NewTOTPManager("dbackup")
 
+	// Initialize encryption service
+	encryptionService := encryption.NewService(cfg.Encryption.MasterKey)
+
 	// Setup middleware
 	setupMiddleware(e, cfg)
 
 	// Setup routes
-	setupRoutes(e, jwtManager, passwordHasher, totpManager)
+	setupRoutes(e, jwtManager, passwordHasher, totpManager, encryptionService)
 
 	// Start server with graceful shutdown
 	go func() {
@@ -108,7 +112,7 @@ func setupMiddleware(e *echo.Echo, cfg *config.Config) {
 	e.Use(middleware.SecurityHeaders())
 }
 
-func setupRoutes(e *echo.Echo, jm *auth.JWTManager, ph *auth.PasswordHasher, tm *auth.TOTPManager) {
+func setupRoutes(e *echo.Echo, jm *auth.JWTManager, ph *auth.PasswordHasher, tm *auth.TOTPManager, encService *encryption.Service) {
 	// Health check
 	e.GET("/health", handlers.HealthCheck)
 
@@ -128,4 +132,8 @@ func setupRoutes(e *echo.Echo, jm *auth.JWTManager, ph *auth.PasswordHasher, tm 
 
 	// Setup authentication routes
 	routes.SetupAuthRoutes(e, jm, ph, tm)
+
+	// Setup database routes
+	db := database.GetDB()
+	routes.SetupDatabaseRoutes(e, db, jm, encService)
 }

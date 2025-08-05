@@ -7,16 +7,29 @@ import (
 	"gorm.io/gorm"
 )
 
-// BackupStatus represents the status of a backup job
-type BackupStatus string
+// BackupJobStatus represents the status of a backup job
+type BackupJobStatus string
 
 const (
-	BackupStatusPending    BackupStatus = "pending"
-	BackupStatusRunning    BackupStatus = "running"
-	BackupStatusCompleted  BackupStatus = "completed"
-	BackupStatusFailed     BackupStatus = "failed"
-	BackupStatusCancelled  BackupStatus = "cancelled"
-	BackupStatusPartial    BackupStatus = "partial"
+	BackupJobStatusPending    BackupJobStatus = "pending"
+	BackupJobStatusRunning    BackupJobStatus = "running"
+	BackupJobStatusCompleted  BackupJobStatus = "completed"
+	BackupJobStatusFailed     BackupJobStatus = "failed"
+	BackupJobStatusCancelled  BackupJobStatus = "cancelled"
+	BackupJobStatusPartial    BackupJobStatus = "partial"
+	BackupJobStatusTimeout    BackupJobStatus = "timeout"
+)
+
+// BackupStatus represents the status of a backup job (alias for backward compatibility)
+type BackupStatus = BackupJobStatus
+
+const (
+	BackupStatusPending    = BackupJobStatusPending
+	BackupStatusRunning    = BackupJobStatusRunning
+	BackupStatusCompleted  = BackupJobStatusCompleted
+	BackupStatusFailed     = BackupJobStatusFailed
+	BackupStatusCancelled  = BackupJobStatusCancelled
+	BackupStatusPartial    = BackupJobStatusPartial
 )
 
 // BackupType represents the type of backup
@@ -74,8 +87,8 @@ type BackupJob struct {
 	MaxRetries      int     `json:"max_retries" gorm:"default:3"`
 	
 	// Metadata
-	Description *string                `json:"description,omitempty" gorm:"type:text"`
-	Tags        map[string]interface{} `json:"tags" gorm:"type:json"`
+	Description *string                 `json:"description,omitempty" gorm:"type:text"`
+	Tags        *map[string]interface{} `json:"tags,omitempty" gorm:"type:json"`
 	
 	// Relationships
 	UserID               uint                `json:"user_id" gorm:"not null;index"`

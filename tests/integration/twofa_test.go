@@ -34,15 +34,15 @@ func setupTestTwoFAServer() *echo.Echo {
 
 	// Setup middleware
 	e.Use(echoMiddleware.LoggerWithConfig(echoMiddleware.LoggerConfig{
-		Format: `{"time":"${time_rfc3339}","method":"${method}","uri":"${uri}","status":${status},"error":"${error}","latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
+		Format:           `{"time":"${time_rfc3339}","method":"${method}","uri":"${uri}","status":${status},"error":"${error}","latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
 		CustomTimeFormat: "2006-01-02T15:04:05.000Z07:00",
-		Output: os.Stdout,
+		Output:           os.Stdout,
 	}))
 	e.Use(echoMiddleware.Recover())
 	e.Use(echoMiddleware.RequestID())
 	e.Use(echoMiddleware.TimeoutWithConfig(echoMiddleware.TimeoutConfig{
 		Timeout: 30 * time.Second,
-	}))  
+	}))
 	e.Use(middleware.CORS())
 	e.Use(middleware.SecurityHeaders())
 
