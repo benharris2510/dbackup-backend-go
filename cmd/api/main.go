@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"time"
 
+	"github.com/dbackup/backend-go/internal/config"
 	"github.com/dbackup/backend-go/internal/handlers"
 	"github.com/dbackup/backend-go/internal/middleware"
 	"github.com/labstack/echo/v4"
@@ -14,29 +16,31 @@ import (
 )
 
 func main() {
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("Failed to load configuration: %v\n", err)
+		os.Exit(1)
+	}
+
 	e := echo.New()
 
 	// Hide Echo banner
 	e.HideBanner = true
 
 	// Configure Echo
-	e.Debug = os.Getenv("ENV") == "development"
+	e.Debug = cfg.IsDevelopment()
 
 	// Setup middleware
-	setupMiddleware(e)
+	setupMiddleware(e, cfg)
 
 	// Setup routes
 	setupRoutes(e)
 
-	// Start server
-	port := os.Getenv("SERVER_PORT")
-	if port == "" {
-		port = "8080"
-	}
-
 	// Start server with graceful shutdown
 	go func() {
-		if err := e.Start(":" + port); err != nil && err != http.ErrServerClosed {
+		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
+		if err := e.Start(addr); err != nil && err != http.ErrServerClosed {
 			e.Logger.Fatal("shutting down the server")
 		}
 	}()
@@ -52,7 +56,7 @@ func main() {
 	}
 }
 
-func setupMiddleware(e *echo.Echo) {
+func setupMiddleware(e *echo.Echo, cfg *config.Config) {
 	// Logger middleware
 	e.Use(echoMiddleware.LoggerWithConfig(echoMiddleware.LoggerConfig{
 		Format: `{"time":"${time_rfc3339}","method":"${method}","uri":"${uri}","status":${status},"error":"${error}","latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",

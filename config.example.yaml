@@ -1,0 +1,80 @@
+# dbackup Configuration Example
+# Copy this file to config.yaml and modify as needed
+
+server:
+  port: "8080"
+  host: "0.0.0.0"
+  env: "development"
+
+database:
+  url: "postgres://dbackup:dbackup@localhost:5432/dbackup_dev?sslmode=disable"
+  maxconnections: 25
+  maxidleconnections: 5
+  connectionmaxlifetime: "5m"
+
+jwt:
+  secretkey: "your-super-secret-jwt-key-change-this-in-production"
+  accesstokenexpires: "168h"  # 7 days
+  refreshtokenexpires: "720h"  # 30 days
+
+redis:
+  url: "redis://localhost:6379/0"
+  password: ""
+  maxretries: 3
+  poolsize: 10
+
+encryption:
+  masterkey: "your-32-byte-encryption-key-here-change-this"
+
+oauth:
+  google:
+    clientid: ""
+    clientsecret: ""
+    redirecturi: "http://localhost:8080/api/auth/google/callback"
+
+s3:
+  defaultendpoint: "https://s3.amazonaws.com"
+  defaultregion: "us-east-1"
+  forcepathstyle: false
+
+backup:
+  maxsize: 10737418240  # 10GB in bytes
+  retentiondays: 30
+  maxconcurrent: 5
+  timeout: "3600s"
+
+cors:
+  allowedorigins:
+    - "http://localhost:3000"
+    - "http://localhost:3001"
+  allowedmethods:
+    - "GET"
+    - "POST"
+    - "PUT"
+    - "DELETE"
+    - "OPTIONS"
+    - "PATCH"
+  allowedheaders:
+    - "Content-Type"
+    - "Authorization"
+    - "X-Requested-With"
+  allowcredentials: true
+
+ratelimit:
+  enabled: true
+  requestsperminute: 60
+  burst: 10
+
+log:
+  level: "debug"
+  format: "json"
+
+monitoring:
+  metricsenabled: true
+  metricsport: 9090
+
+websocket:
+  readbuffersize: 1024
+  writebuffersize: 1024
+  pingperiod: "54s"
+  pongwait: "60s"
