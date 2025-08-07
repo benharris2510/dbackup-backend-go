@@ -1,0 +1,80 @@
+# Git files
+.git
+.gitignore
+README.md
+CHANGELOG.md
+.github/
+
+# Documentation
+docs/
+*.md
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files and coverage
+*_test.go
+coverage.out
+coverage.html
+test_coverage/
+
+# Build artifacts
+main
+*.exe
+*.dll
+*.so
+*.dylib
+dist/
+build/
+
+# Logs
+logs/
+*.log
+
+# Development files
+.env
+.env.local
+.env.development
+.env.test
+docker-compose*.yml
+Dockerfile*
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Node modules (if any)
+node_modules/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+backups/
+*.backup
+
+# Cache directories
+.cache/
+.npm/
+.yarn/
+
+# Testing
+testdata/
+fixtures/
+
+# Performance profiles
+*.prof
+*.pprof
+
+# Vendor directory (if using vendor)
+vendor/

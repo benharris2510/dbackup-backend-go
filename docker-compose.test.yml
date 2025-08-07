@@ -1,0 +1,130 @@
+version: '3.8'
+
+# Test-specific overrides for Docker Compose integration tests
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.test.yml
+
+services:
+  # Test runner service
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: dbackup-test-runner
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/dbackup?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - GO_ENV=test
+      - PORT=8080
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      - dbackup-network
+    command: ["sh", "-c", "sleep 10 && go test -v -tags=integration ./tests/integration/docker_compose_test.go"]
+
+  # API service with test-specific settings
+  api:
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/dbackup?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET_KEY=test-jwt-secret-key
+      - ENCRYPTION_MASTER_KEY=test-master-key-32-chars-long1234
+      - GO_ENV=test
+      - PORT=8080
+      - LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # PostgreSQL with faster settings for testing
+  postgres:
+    environment:
+      POSTGRES_DB: dbackup
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    command: >
+      postgres
+      -c fsync=off
+      -c synchronous_commit=off
+      -c full_page_writes=off
+      -c checkpoint_segments=32
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c shared_buffers=256MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # Redis with test-optimized settings
+  redis:
+    command: redis-server --appendonly yes --save ""
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # MySQL with test data
+  mysql:
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: testuser
+      MYSQL_PASSWORD: testpass
+    command: >
+      mysqld
+      --innodb-buffer-pool-size=64M
+      --innodb-log-file-size=32M
+      --innodb-flush-log-at-trx-commit=0
+      --sync-binlog=0
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # MinIO with test settings
+  minio:
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Disable admin interfaces for testing
+  adminer:
+    deploy:
+      replicas: 0
+
+  redis-commander:
+    deploy:
+      replicas: 0
+
+volumes:
+  # Use temporary volumes for testing
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  mysql_data:
+    driver: local
+  minio_data:
+    driver: local
+  go_mod_cache:
+    driver: local

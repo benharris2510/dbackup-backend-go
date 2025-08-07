@@ -1,0 +1,178 @@
+name: Docker Compose Integration Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+    
+    services:
+      docker:
+        image: docker:20.10.16
+        options: --privileged
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Install Docker Compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/download/2.20.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        docker-compose --version
+
+    - name: Create environment file
+      run: |
+        cp .env.example .env
+
+    - name: Build Docker images
+      run: |
+        docker-compose build
+
+    - name: Start services
+      run: |
+        docker-compose up -d
+        
+    - name: Wait for services to be ready
+      run: |
+        # Wait for PostgreSQL
+        timeout 60 bash -c 'until docker-compose exec -T postgres pg_isready -U postgres; do sleep 2; done'
+        
+        # Wait for Redis
+        timeout 30 bash -c 'until docker-compose exec -T redis redis-cli ping | grep PONG; do sleep 2; done'
+        
+        # Wait for API
+        timeout 60 bash -c 'until curl -s http://localhost:8080/health | grep healthy; do sleep 2; done'
+        
+        # Wait for MySQL (optional)
+        timeout 60 bash -c 'until docker-compose exec -T mysql mysqladmin ping -h localhost -u root -prootpassword; do sleep 2; done' || echo "MySQL timeout (continuing)"
+
+    - name: Show service status
+      run: |
+        docker-compose ps
+
+    - name: Run integration tests
+      run: |
+        # Run tests inside the API container to have network access
+        docker-compose exec -T api go test -v -tags=integration ./tests/integration/docker_compose_test.go
+
+    - name: Run performance benchmarks
+      run: |
+        docker-compose exec -T api go test -bench=. -benchmem ./tests/integration/docker_compose_test.go
+
+    - name: Show service logs on failure
+      if: failure()
+      run: |
+        echo "=== API Logs ==="
+        docker-compose logs api
+        echo "=== PostgreSQL Logs ==="
+        docker-compose logs postgres
+        echo "=== Redis Logs ==="
+        docker-compose logs redis
+        echo "=== MySQL Logs ==="
+        docker-compose logs mysql
+        echo "=== MinIO Logs ==="
+        docker-compose logs minio
+
+    - name: Health checks
+      run: |
+        # API health check
+        curl -f http://localhost:8080/health
+        
+        # Database connectivity
+        docker-compose exec -T postgres pg_isready -U postgres
+        docker-compose exec -T redis redis-cli ping
+        
+        # MinIO health check
+        curl -f http://localhost:9000/minio/health/live
+
+    - name: Test backup functionality
+      run: |
+        # Test database backup preparation
+        docker-compose exec -T postgres psql -U postgres -d dbackup -c "CREATE TABLE IF NOT EXISTS test_backup (id SERIAL PRIMARY KEY, data TEXT);"
+        docker-compose exec -T postgres psql -U postgres -d dbackup -c "INSERT INTO test_backup (data) VALUES ('integration-test-data');"
+        
+        # Test MySQL backup preparation
+        docker-compose exec -T mysql mysql -u root -prootpassword testdb -e "INSERT INTO users (username, email, password_hash) VALUES ('integration-test', 'test@integration.com', 'hash123');" || echo "MySQL insert failed (continuing)"
+
+    - name: Stop services
+      if: always()
+      run: |
+        docker-compose down --volumes --remove-orphans
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker images
+      run: |
+        docker build -t dbackup-api:latest .
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'dbackup-api:latest'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  performance-test:
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Install Docker Compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/download/2.20.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+
+    - name: Create environment file
+      run: |
+        cp .env.example .env
+
+    - name: Start services
+      run: |
+        docker-compose up -d
+        # Wait for services
+        timeout 60 bash -c 'until curl -s http://localhost:8080/health | grep healthy; do sleep 2; done'
+
+    - name: Run load tests
+      run: |
+        # Install Apache Bench
+        sudo apt-get update
+        sudo apt-get install -y apache2-utils
+        
+        # Run basic load test
+        ab -n 100 -c 10 http://localhost:8080/health
+
+    - name: Stop services
+      if: always()
+      run: |
+        docker-compose down --volumes --remove-orphans

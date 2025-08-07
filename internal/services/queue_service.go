@@ -490,6 +490,22 @@ func (qs *QueueService) Close() error {
 	return nil
 }
 
+// Shutdown gracefully shuts down the queue service
+func (qs *QueueService) Shutdown(ctx context.Context) error {
+	log.Println("Shutting down queue service...")
+	
+	// Wait for any pending operations to complete or timeout
+	select {
+	case <-ctx.Done():
+		log.Println("Queue service shutdown timed out, forcing close")
+	case <-time.After(2 * time.Second):
+		log.Println("Queue service shutdown grace period completed")
+	}
+	
+	// Close the service
+	return qs.Close()
+}
+
 // convertTaskInfo converts asynq.TaskInfo to JobInfo
 func (qs *QueueService) convertTaskInfo(taskInfo *asynq.TaskInfo, payload interface{}) *JobInfo {
 	var payloadMap map[string]interface{}

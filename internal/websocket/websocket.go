@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -77,7 +78,7 @@ type BackupProgressMessage struct {
 func NewWebSocketService(jwtManager *auth.JWTManager) *WebSocketService {
 	hub := &Hub{
 		connections:  make(map[*Connection]bool),
-		broadcast:    make(chan []byte),
+		broadcast:    make(chan []byte, 256), // Add buffer to prevent blocking
 		register:     make(chan *Connection),
 		unregister:   make(chan *Connection),
 		userChannels: make(map[uint]map[*Connection]bool),
@@ -224,9 +225,9 @@ func (ws *WebSocketService) Broadcast(message *Message) error {
 
 // GetConnectionCount returns the number of active connections
 func (ws *WebSocketService) GetConnectionCount() int {
-	ws.mutex.RLock()
-	defer ws.mutex.RUnlock()
-	return len(ws.connections)
+	ws.hub.mutex.RLock()
+	defer ws.hub.mutex.RUnlock()
+	return len(ws.hub.connections)
 }
 
 // GetUserConnectionCount returns the number of connections for a specific user
@@ -423,4 +424,45 @@ func generateRandomString(length int) string {
 		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
 	}
 	return string(b)
+}
+
+// Shutdown gracefully closes all WebSocket connections
+func (h *Hub) Shutdown(ctx context.Context) error {
+	log.Println("Shutting down WebSocket hub...")
+
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	// Send close message to all connections
+	closeMessage := &Message{
+		Type:      "server_shutdown",
+		Data:      "Server is shutting down",
+		Timestamp: time.Now(),
+	}
+
+	closeBytes, err := json.Marshal(closeMessage)
+	if err != nil {
+		log.Printf("Error marshaling close message: %v", err)
+	}
+
+	// Notify all connections about shutdown
+	for conn := range h.connections {
+		select {
+		case conn.Send <- closeBytes:
+		default:
+			// Channel might be full, skip
+		}
+		
+		// Close the connection gracefully
+		conn.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "Server shutdown"))
+		conn.Conn.Close()
+		close(conn.Send)
+	}
+
+	// Clear all connections
+	h.connections = make(map[*Connection]bool)
+	h.userChannels = make(map[uint]map[*Connection]bool)
+
+	log.Println("WebSocket hub shutdown completed")
+	return nil
 }

@@ -205,6 +205,49 @@ func GetMigrator() *Migrator {
 	return NewMigrator(GetDB())
 }
 
+// RunFullMigration runs the complete migration process including versioned migrations
+func RunFullMigration() error {
+	db := GetDB()
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	// Initialize versioned migration system
+	migrationSystem := NewMigrationSystem(db, "migrations")
+	migrationSystem.SetLogger(DefaultLogger{})
+
+	// Initialize migration tables
+	if err := migrationSystem.Initialize(); err != nil {
+		return fmt.Errorf("failed to initialize migration system: %w", err)
+	}
+
+	// Load migrations from files
+	if err := migrationSystem.LoadMigrationsFromDir(); err != nil {
+		return fmt.Errorf("failed to load migrations: %w", err)
+	}
+
+	// Run pending migrations
+	if err := migrationSystem.Up(""); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	log.Printf("Migration system completed successfully")
+	return nil
+}
+
+// GetMigrationSystem returns a configured migration system instance
+func GetMigrationSystem(migrationsDir string) *MigrationSystem {
+	db := GetDB()
+	if db == nil {
+		log.Printf("Warning: database not initialized for migration system")
+		return nil
+	}
+
+	migrationSystem := NewMigrationSystem(db, migrationsDir)
+	migrationSystem.SetLogger(DefaultLogger{})
+	return migrationSystem
+}
+
 // getModelName extracts the model name from the given interface
 func getModelName(model interface{}) string {
 	if model == nil {

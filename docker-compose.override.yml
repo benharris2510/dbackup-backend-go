@@ -1,0 +1,51 @@
+version: '3.8'
+
+# Override file for development-specific configurations
+# This file is automatically loaded by docker-compose
+
+services:
+  api:
+    # Enable hot reloading in development
+    environment:
+      - CGO_ENABLED=1
+      - GOCACHE=/tmp/go-build
+    volumes:
+      # Mount source code for hot reloading
+      - .:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/tmp/go-build
+    # Enable debugging
+    command: air -c .air.toml
+    
+  # Add pgAdmin for PostgreSQL administration
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: dbackup-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@dbackup.local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "8083:80"
+    depends_on:
+      - postgres
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - dbackup-network
+
+  # Mail server for testing email notifications
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: dbackup-mailhog
+    ports:
+      - "1025:1025" # SMTP port
+      - "8025:8025" # Web UI port
+    networks:
+      - dbackup-network
+
+volumes:
+  go_build_cache:
+    driver: local
+  pgadmin_data:
+    driver: local

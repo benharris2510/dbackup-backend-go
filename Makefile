@@ -3,7 +3,7 @@
 # Variables
 BINARY_NAME=api
 MAIN_PATH=cmd/api/main.go
-DOCKER_IMAGE=dbackup-backend-go
+DOCKER_IMAGE=dbackup-backend
 DOCKER_TAG=latest
 
 # Build the application
@@ -63,17 +63,37 @@ fmt:
 # Run database migrations up
 migrate-up:
 	@echo "Running migrations up..."
-	@migrate -path migrations -database "${DATABASE_URL}" up
+	@go run cmd/migrate/main.go up
 
 # Run database migrations down
 migrate-down:
 	@echo "Running migrations down..."
-	@migrate -path migrations -database "${DATABASE_URL}" down
+	@go run cmd/migrate/main.go down
 
 # Create a new migration
 migrate-create:
 	@echo "Creating migration..."
-	@migrate create -ext sql -dir migrations -seq $(name)
+	@go run cmd/migrate/main.go create -name="$(name)"
+
+# Show migration status
+migrate-status:
+	@echo "Showing migration status..."
+	@go run cmd/migrate/main.go status
+
+# Show current migration version
+migrate-version:
+	@echo "Showing current migration version..."
+	@go run cmd/migrate/main.go version
+
+# Reset database (rollback all migrations)
+migrate-reset:
+	@echo "Resetting database..."
+	@go run cmd/migrate/main.go reset
+
+# Refresh database (reset and rerun all migrations)
+migrate-refresh:
+	@echo "Refreshing database..."
+	@go run cmd/migrate/main.go refresh
 
 # Build Docker image
 docker-build:
@@ -122,3 +142,91 @@ update-deps:
 	@echo "Updating dependencies..."
 	@go get -u ./...
 	@go mod tidy
+
+# Docker Compose Commands
+compose-up: ## Start development environment with Docker Compose
+	@echo "Starting development environment..."
+	@docker-compose up -d
+	@echo "Services started. API available at http://localhost:8080"
+
+compose-build: ## Build and start development environment
+	@echo "Building and starting development environment..."
+	@docker-compose up -d --build
+
+compose-down: ## Stop development environment
+	@echo "Stopping development environment..."
+	@docker-compose down
+
+compose-logs: ## Follow development logs
+	@docker-compose logs -f api
+
+compose-prod: ## Start production environment
+	@echo "Starting production environment..."
+	@docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+compose-prod-down: ## Stop production environment
+	@echo "Stopping production environment..."
+	@docker-compose -f docker-compose.yml -f docker-compose.prod.yml down
+
+compose-clean: ## Stop services and remove containers, networks
+	@echo "Cleaning up containers and networks..."
+	@docker-compose down --remove-orphans
+
+compose-clean-all: ## Stop services and remove everything including volumes
+	@echo "Cleaning up everything including volumes..."
+	@docker-compose down -v --remove-orphans
+
+compose-shell: ## Access API container shell
+	@echo "Accessing API container shell..."
+	@docker-compose exec api sh
+
+compose-db-shell: ## Access PostgreSQL shell
+	@echo "Connecting to PostgreSQL..."
+	@docker-compose exec postgres psql -U postgres -d dbackup
+
+compose-redis-cli: ## Access Redis CLI
+	@echo "Connecting to Redis..."
+	@docker-compose exec redis redis-cli
+
+compose-status: ## Check Docker Compose service status
+	@echo "Checking service status..."
+	@docker-compose ps
+
+setup-env: ## Copy .env.example to .env if not exists
+	@if [ ! -f .env ]; then \
+		cp .env.example .env; \
+		echo "Created .env file from .env.example"; \
+		echo "Please review and update .env file if needed"; \
+	else \
+		echo ".env file already exists"; \
+	fi
+
+# Quick setup for new developers
+quick-start: setup-env compose-up ## Quick setup: copy env and start services
+	@echo "Quick start complete!"
+	@echo "Services available:"
+	@echo "  - API: http://localhost:8080"
+	@echo "  - Adminer: http://localhost:8081"
+	@echo "  - MinIO Console: http://localhost:9001"
+
+# Integration Testing
+test-integration: ## Run integration tests with Docker Compose
+	@echo "Running Docker Compose integration tests..."
+	@./scripts/test-docker-compose.sh --test
+
+test-integration-full: ## Run full integration test suite including benchmarks
+	@echo "Running full integration test suite..."
+	@./scripts/test-docker-compose.sh --test --benchmark
+
+test-docker-health: ## Run health checks only
+	@echo "Running Docker Compose health checks..."
+	@./scripts/test-docker-compose.sh --health
+
+test-docker-logs: ## Show Docker Compose service logs
+	@echo "Showing Docker Compose service logs..."
+	@./scripts/test-docker-compose.sh --logs
+
+# Performance Testing
+benchmark-docker: ## Run performance benchmarks on Docker Compose stack
+	@echo "Running Docker Compose performance benchmarks..."
+	@./scripts/test-docker-compose.sh --benchmark
