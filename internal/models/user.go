@@ -213,3 +213,71 @@ type SubscriptionLimits struct {
 	RetentionDays         int
 	BackupFrequency       string
 }
+
+// UserPublic represents the public user information returned in API responses
+type UserPublic struct {
+	ID             uint   `json:"id"`
+	UID            string `json:"uid"`
+	Email          string `json:"email"`
+	FirstName      string `json:"first_name"`
+	LastName       string `json:"last_name"`
+	FullName       string `json:"full_name"`
+	IsVerified     bool   `json:"is_verified"`
+	Has2FA         bool   `json:"has_2fa"`
+	Avatar         string `json:"avatar,omitempty"`
+	Timezone       string `json:"timezone"`
+	SubscriptionTier string `json:"subscription_tier"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+}
+
+// ToPublic converts the User model to a UserPublic struct for API responses
+func (u *User) ToPublic() UserPublic {
+	public := UserPublic{
+		ID:               u.ID,
+		UID:              u.UID,
+		Email:            u.Email,
+		FirstName:        u.FirstName,
+		LastName:         u.LastName,
+		FullName:         u.GetFullName(),
+		IsVerified:       u.IsEmailVerified,
+		Has2FA:           u.TwoFactorEnabled,
+		Timezone:         u.Timezone,
+		SubscriptionTier: u.SubscriptionTier,
+		CreatedAt:        u.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:        u.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	
+	// Handle optional avatar
+	if u.Avatar != nil {
+		public.Avatar = *u.Avatar
+	}
+	
+	return public
+}
+
+// SerializeForAPI implements the APISerializable interface
+// This method defines how the User model should be serialized for API responses
+func (u *User) SerializeForAPI() map[string]interface{} {
+	data := map[string]interface{}{
+		"id":                u.ID,
+		"uid":               u.UID,
+		"email":             u.Email,
+		"first_name":        u.FirstName,
+		"last_name":         u.LastName,
+		"full_name":         u.GetFullName(),
+		"is_verified":       u.IsEmailVerified,
+		"has_2fa":           u.TwoFactorEnabled,
+		"timezone":          u.Timezone,
+		"subscription_tier": u.SubscriptionTier,
+		"created_at":        u.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"updated_at":        u.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	
+	// Handle optional fields
+	if u.Avatar != nil {
+		data["avatar"] = *u.Avatar
+	}
+	
+	return data
+}

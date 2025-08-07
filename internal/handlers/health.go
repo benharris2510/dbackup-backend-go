@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dbackup/backend-go/internal/database"
+	"github.com/dbackup/backend-go/internal/responses"
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -50,7 +51,7 @@ var startTime = time.Now()
 // Liveness returns a simple liveness check
 // GET /api/health/live
 func (h *HealthHandler) Liveness(c echo.Context) error {
-	return c.JSON(http.StatusOK, map[string]interface{}{
+	return responses.Success(c, "Health check completed", map[string]interface{}{
 		"status":    "alive",
 		"timestamp": time.Now(),
 	})
@@ -89,10 +90,10 @@ func (h *HealthHandler) Readiness(c echo.Context) error {
 
 	if !overallHealthy {
 		status.Status = "degraded"
-		return c.JSON(http.StatusServiceUnavailable, status)
+		return responses.Error(c, http.StatusServiceUnavailable, "Service unavailable") // Data: status)
 	}
 
-	return c.JSON(http.StatusOK, status)
+	return responses.Success(c, "Health check completed", status)
 }
 
 // Health returns a comprehensive health check
@@ -141,13 +142,13 @@ func (h *HealthHandler) Health(c echo.Context) error {
 
 	if !overallHealthy {
 		status.Status = "unhealthy"
-		return c.JSON(http.StatusServiceUnavailable, status)
+		return responses.Error(c, http.StatusServiceUnavailable, "Service unavailable") // Data: status)
 	} else if degraded {
 		status.Status = "degraded"
-		return c.JSON(http.StatusOK, status)
+		return responses.Success(c, "Health check completed", status)
 	}
 
-	return c.JSON(http.StatusOK, status)
+	return responses.Success(c, "Health check completed", status)
 }
 
 // checkDatabase checks database connectivity and performance
@@ -301,7 +302,7 @@ func HealthCheck(c echo.Context) error {
 			"error":  err.Error(),
 		}
 		response["status"] = "unhealthy"
-		return c.JSON(http.StatusServiceUnavailable, response)
+		return responses.Error(c, http.StatusServiceUnavailable, "Service unavailable") // Data: response)
 	} else {
 		checks["database"] = map[string]interface{}{
 			"status":    "healthy",
@@ -309,5 +310,5 @@ func HealthCheck(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, response)
+	return responses.Success(c, "Health check completed", response)
 }

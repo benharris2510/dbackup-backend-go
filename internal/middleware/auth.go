@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/dbackup/backend-go/internal/auth"
+	"github.com/dbackup/backend-go/internal/database"
+	"github.com/dbackup/backend-go/internal/models"
 	"github.com/labstack/echo/v4"
 )
 
@@ -12,19 +14,19 @@ import (
 type AuthConfig struct {
 	// JWTManager is the JWT manager instance
 	JWTManager *auth.JWTManager
-	
+
 	// TokenManager is the token manager with revocation support (optional)
 	TokenManager *auth.TokenManager
-	
+
 	// Skipper defines a function to skip middleware
 	Skipper Skipper
-	
+
 	// ErrorHandler defines a function which is executed for an invalid token
 	ErrorHandler AuthErrorHandler
-	
+
 	// SuccessHandler defines a function which is executed for a valid token
 	SuccessHandler AuthSuccessHandler
-	
+
 	// TokenLookup is a string in the form of "<source>:<name>" that is used
 	// to extract token from the request.
 	// Optional. Default value "header:Authorization".
@@ -33,11 +35,11 @@ type AuthConfig struct {
 	// - "query:<name>"
 	// - "cookie:<name>"
 	TokenLookup string
-	
+
 	// AuthScheme to be used in the Authorization header.
 	// Optional. Default value "Bearer".
 	AuthScheme string
-	
+
 	// RequireAccessToken when true, only accepts access tokens
 	// When false, accepts both access and refresh tokens
 	RequireAccessToken bool
@@ -209,11 +211,11 @@ func GetUserFromContext(c echo.Context) *auth.Claims {
 	if user == nil {
 		return nil
 	}
-	
+
 	if claims, ok := user.(*auth.Claims); ok {
 		return claims
 	}
-	
+
 	return nil
 }
 
@@ -223,11 +225,11 @@ func GetUserIDFromContext(c echo.Context) (uint, bool) {
 	if userID == nil {
 		return 0, false
 	}
-	
+
 	if id, ok := userID.(uint); ok {
 		return id, true
 	}
-	
+
 	return 0, false
 }
 
@@ -237,11 +239,11 @@ func GetTeamIDFromContext(c echo.Context) (uint, bool) {
 	if teamID == nil {
 		return 0, false
 	}
-	
+
 	if id, ok := teamID.(uint); ok {
 		return id, true
 	}
-	
+
 	return 0, false
 }
 
@@ -310,6 +312,27 @@ func AllowRefreshToken(jwtManager *auth.JWTManager) echo.MiddlewareFunc {
 	return JWTWithConfig(config)
 }
 
+// CookieJWT returns a JWT middleware that extracts tokens from cookies (default for protected routes)
+func CookieJWT(jwtManager *auth.JWTManager) echo.MiddlewareFunc {
+	config := DefaultAuthConfig
+	config.JWTManager = jwtManager
+	config.TokenLookup = "cookie:access_token"
+	config.RequireAccessToken = true
+	config.SuccessHandler = func(c echo.Context) {
+		// Get user ID from claims and fetch full user model
+		userID := c.Get("user_id")
+		if userID != nil {
+			// Import database package to get user
+			db := database.GetDB()
+			var user models.User
+			if err := db.Where("id = ?", userID).First(&user).Error; err == nil {
+				c.Set("user_model", &user)
+			}
+		}
+	}
+	return JWTWithConfig(config)
+}
+
 // OptionalAuth returns middleware that tries to authenticate but doesn't fail if no token
 func OptionalAuth(jwtManager *auth.JWTManager) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -350,4 +373,13 @@ func OptionalAuth(jwtManager *auth.JWTManager) echo.MiddlewareFunc {
 // IsAuthenticated checks if the current request is authenticated
 func IsAuthenticated(c echo.Context) bool {
 	return GetUserFromContext(c) != nil
+}
+
+// GetUserModel extracts the full user model from context (set by cookie JWT middleware)
+func GetUserModel(c echo.Context) *models.User {
+	user, ok := c.Get("user_model").(*models.User)
+	if !ok {
+		return nil
+	}
+	return user
 }

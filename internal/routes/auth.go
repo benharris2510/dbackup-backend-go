@@ -15,6 +15,9 @@ func SetupAuthRoutes(e *echo.Echo, jm *auth.JWTManager, ph *auth.PasswordHasher,
 	// Create 2FA handler
 	twoFAHandler := handlers.NewTwoFAHandler(tm, ph)
 
+	// Use centralized cookie-based JWT middleware
+	cookieJWTMiddleware := middleware.CookieJWT(jm)
+
 	// Auth routes group
 	authGroup := e.Group("/api/auth")
 
@@ -22,13 +25,19 @@ func SetupAuthRoutes(e *echo.Echo, jm *auth.JWTManager, ph *auth.PasswordHasher,
 	authGroup.POST("/register", authHandler.Register)
 	authGroup.POST("/login", authHandler.Login)
 	authGroup.POST("/refresh", authHandler.Refresh)
+	
+	// Demo route to show automatic array serialization (public for testing)
+	authGroup.GET("/demo/users", authHandler.GetUsers)
 
-	// Protected routes (authentication required)
-	authGroup.GET("/session", authHandler.Session, middleware.JWT(jm))
-	authGroup.POST("/logout", authHandler.Logout, middleware.JWT(jm))
+	// Protected routes (authentication required) - use cookie-based auth
+	authGroup.GET("/session", authHandler.Session, cookieJWTMiddleware)
+	authGroup.POST("/logout", authHandler.Logout, cookieJWTMiddleware)
+	
+	// Demo route to show automatic array serialization
+	authGroup.GET("/users", authHandler.GetUsers, cookieJWTMiddleware)
 
-	// 2FA routes (authentication required)
-	twoFAGroup := authGroup.Group("/2fa", middleware.JWT(jm))
+	// 2FA routes (authentication required) - use cookie-based auth
+	twoFAGroup := authGroup.Group("/2fa", cookieJWTMiddleware)
 	twoFAGroup.GET("/status", twoFAHandler.Status)
 	twoFAGroup.POST("/setup", twoFAHandler.Setup)
 	twoFAGroup.POST("/enable", twoFAHandler.Enable)

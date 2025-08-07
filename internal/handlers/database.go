@@ -6,7 +6,9 @@ import (
 
 	"github.com/dbackup/backend-go/internal/database"
 	"github.com/dbackup/backend-go/internal/encryption"
+	"github.com/dbackup/backend-go/internal/middleware"
 	"github.com/dbackup/backend-go/internal/models"
+	"github.com/dbackup/backend-go/internal/responses"
 	"github.com/dbackup/backend-go/internal/services"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
@@ -14,9 +16,9 @@ import (
 
 // DatabaseHandler handles database connection management
 type DatabaseHandler struct {
-	db            *gorm.DB
-	dbService     *services.DatabaseService
-	encService    *encryption.Service
+	db         *gorm.DB
+	dbService  *services.DatabaseService
+	encService *encryption.Service
 }
 
 // NewDatabaseHandler creates a new database handler
@@ -30,23 +32,20 @@ func NewDatabaseHandler(db *gorm.DB, encService *encryption.Service) *DatabaseHa
 
 // ListDatabaseConnections handles GET /api/databases
 func (h *DatabaseHandler) ListDatabaseConnections(c echo.Context) error {
-	// Get user from context (set by auth middleware)
-	user, ok := c.Get("user").(*models.User)
-	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
-	}
+	// Get authenticated user (guaranteed to exist after auth middleware)
+	user := middleware.GetUserModel(c)
 
 	// Parse query parameters
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	if page < 1 {
 		page = 1
 	}
-	
+
 	limit, _ := strconv.Atoi(c.QueryParam("limit"))
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}
-	
+
 	search := c.QueryParam("search")
 	dbType := c.QueryParam("type")
 	isActive := c.QueryParam("active")
@@ -57,14 +56,14 @@ func (h *DatabaseHandler) ListDatabaseConnections(c echo.Context) error {
 	// Apply filters
 	if search != "" {
 		// Use LIKE for broader database compatibility (SQLite doesn't support ILIKE)
-		query = query.Where("LOWER(name) LIKE LOWER(?) OR LOWER(host) LIKE LOWER(?) OR LOWER(database) LIKE LOWER(?)", 
+		query = query.Where("LOWER(name) LIKE LOWER(?) OR LOWER(host) LIKE LOWER(?) OR LOWER(database) LIKE LOWER(?)",
 			"%"+search+"%", "%"+search+"%", "%"+search+"%")
 	}
-	
+
 	if dbType != "" {
 		query = query.Where("type = ?", dbType)
 	}
-	
+
 	if isActive != "" {
 		active, _ := strconv.ParseBool(isActive)
 		query = query.Where("is_active = ?", active)
@@ -81,9 +80,9 @@ func (h *DatabaseHandler) ListDatabaseConnections(c echo.Context) error {
 		Limit(limit).
 		Order("created_at DESC").
 		Find(&connections).Error
-	
+
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to fetch database connections")
+		return responses.InternalError(c, "Failed to fetch database connections")
 	}
 
 	// Convert to public format
@@ -92,37 +91,30 @@ func (h *DatabaseHandler) ListDatabaseConnections(c echo.Context) error {
 		publicConnections[i] = conn.ToPublic()
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"status": "success",
-		"data": map[string]interface{}{
-			"connections": publicConnections,
-			"pagination": map[string]interface{}{
-				"page":        page,
-				"limit":       limit,
-				"total":       total,
-				"total_pages": (total + int64(limit) - 1) / int64(limit),
-			},
-		},
-	})
+	paginationMeta := map[string]interface{}{
+		"page":        page,
+		"limit":       limit,
+		"total":       total,
+		"total_pages": (total + int64(limit) - 1) / int64(limit),
+	}
+
+	return responses.SuccessWithMeta(c, "Database connections retrieved successfully", publicConnections, paginationMeta)
 }
 
 // CreateDatabaseConnection handles POST /api/databases
 func (h *DatabaseHandler) CreateDatabaseConnection(c echo.Context) error {
-	// Get user from context
-	user, ok := c.Get("user").(*models.User)
-	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
-	}
+	// Get authenticated user (guaranteed to exist after auth middleware)
+	user := middleware.GetUserModel(c)
 
 	// Parse request
 	var req models.ConnectionRequest
 	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+		return responses.Error(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate request
 	if err := c.Validate(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return responses.Error(c, http.StatusBadRequest, err.Error())
 	}
 
 	// Convert to model
@@ -134,17 +126,17 @@ func (h *DatabaseHandler) CreateDatabaseConnection(c echo.Context) error {
 
 	// Validate connection configuration
 	if err := conn.ValidateConnection(); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return responses.Error(c, http.StatusBadRequest, err.Error())
 	}
 
 	// Encrypt credentials
 	if err := conn.EncryptCredentials(h.encService); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to encrypt credentials")
+		return responses.InternalError(c, "Failed to encrypt credentials")
 	}
 
 	// Save to database
 	if err := h.db.Create(conn).Error; err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create database connection")
+		return responses.InternalError(c, "Failed to create database connection")
 	}
 
 	// Load tags if specified
@@ -155,63 +147,53 @@ func (h *DatabaseHandler) CreateDatabaseConnection(c echo.Context) error {
 		h.db.Save(conn)
 	}
 
-	return c.JSON(http.StatusCreated, map[string]interface{}{
-		"status": "success",
-		"data":   conn.ToPublic(),
-	})
+	return responses.Created(c, "Database connection created successfully", conn.ToPublic())
 }
 
 // GetDatabaseConnection handles GET /api/databases/:uid
 func (h *DatabaseHandler) GetDatabaseConnection(c echo.Context) error {
-	user, ok := c.Get("user").(*models.User)
-	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
-	}
+	// Get authenticated user (guaranteed to exist after auth middleware)
+	user := middleware.GetUserModel(c)
 
 	uid := c.Param("uid")
 	if uid == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Connection UID is required")
+		return responses.Error(c, http.StatusBadRequest, "Connection UID is required")
 	}
 
 	var conn models.DatabaseConnection
 	err := h.db.Preload("Tags").Preload("Tables").
 		Where("uid = ? AND user_id = ?", uid, user.ID).
 		First(&conn).Error
-	
+
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return echo.NewHTTPError(http.StatusNotFound, "Database connection not found")
+			return responses.NotFound(c, "Database connection not found")
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to fetch database connection")
+		return responses.InternalError(c, "Failed to fetch database connection")
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"status": "success",
-		"data":   conn.ToPublic(),
-	})
+	return responses.Success(c, "Database connection retrieved successfully", conn.ToPublic())
 }
 
 // UpdateDatabaseConnection handles PUT /api/databases/:uid
 func (h *DatabaseHandler) UpdateDatabaseConnection(c echo.Context) error {
-	user, ok := c.Get("user").(*models.User)
-	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
-	}
+	// Get authenticated user (guaranteed to exist after auth middleware)
+	user := middleware.GetUserModel(c)
 
 	uid := c.Param("uid")
 	if uid == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Connection UID is required")
+		return responses.Error(c, http.StatusBadRequest, "Connection UID is required")
 	}
 
 	// Parse request
 	var req models.ConnectionRequest
 	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+		return responses.Error(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate request
 	if err := c.Validate(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return responses.Error(c, http.StatusBadRequest, err.Error())
 	}
 
 	// Find existing connection
@@ -219,9 +201,9 @@ func (h *DatabaseHandler) UpdateDatabaseConnection(c echo.Context) error {
 	err := h.db.Where("uid = ? AND user_id = ?", uid, user.ID).First(&conn).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return echo.NewHTTPError(http.StatusNotFound, "Database connection not found")
+			return responses.NotFound(c, "Database connection not found")
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to fetch database connection")
+		return responses.InternalError(c, "Failed to fetch database connection")
 	}
 
 	// Update fields
@@ -233,17 +215,17 @@ func (h *DatabaseHandler) UpdateDatabaseConnection(c echo.Context) error {
 
 	// Validate updated connection
 	if err := updatedConn.ValidateConnection(); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return responses.Error(c, http.StatusBadRequest, err.Error())
 	}
 
 	// Encrypt credentials
 	if err := updatedConn.EncryptCredentials(h.encService); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to encrypt credentials")
+		return responses.InternalError(c, "Failed to encrypt credentials")
 	}
 
 	// Save to database
 	if err := h.db.Save(updatedConn).Error; err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update database connection")
+		return responses.InternalError(c, "Failed to update database connection")
 	}
 
 	// Update tags if specified
@@ -254,22 +236,17 @@ func (h *DatabaseHandler) UpdateDatabaseConnection(c echo.Context) error {
 		h.db.Save(updatedConn)
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"status": "success",
-		"data":   updatedConn.ToPublic(),
-	})
+	return responses.Success(c, "Database connection updated successfully", updatedConn.ToPublic())
 }
 
 // DeleteDatabaseConnection handles DELETE /api/databases/:uid
 func (h *DatabaseHandler) DeleteDatabaseConnection(c echo.Context) error {
-	user, ok := c.Get("user").(*models.User)
-	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
-	}
+	// Get authenticated user (guaranteed to exist after auth middleware)
+	user := middleware.GetUserModel(c)
 
 	uid := c.Param("uid")
 	if uid == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Connection UID is required")
+		return responses.Error(c, http.StatusBadRequest, "Connection UID is required")
 	}
 
 	// Check if connection exists and belongs to user
@@ -277,32 +254,27 @@ func (h *DatabaseHandler) DeleteDatabaseConnection(c echo.Context) error {
 	err := h.db.Where("uid = ? AND user_id = ?", uid, user.ID).First(&conn).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return echo.NewHTTPError(http.StatusNotFound, "Database connection not found")
+			return responses.NotFound(c, "Database connection not found")
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to fetch database connection")
+		return responses.InternalError(c, "Failed to fetch database connection")
 	}
 
 	// Soft delete the connection
 	if err := h.db.Delete(&conn).Error; err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete database connection")
+		return responses.InternalError(c, "Failed to delete database connection")
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"status":  "success",
-		"message": "Database connection deleted successfully",
-	})
+	return responses.Success(c, "Database connection deleted successfully", nil)
 }
 
 // TestDatabaseConnection handles POST /api/databases/:uid/test
 func (h *DatabaseHandler) TestDatabaseConnection(c echo.Context) error {
-	user, ok := c.Get("user").(*models.User)
-	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
-	}
+	// Get authenticated user (guaranteed to exist after auth middleware)
+	user := middleware.GetUserModel(c)
 
 	uid := c.Param("uid")
 	if uid == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Connection UID is required")
+		return responses.Error(c, http.StatusBadRequest, "Connection UID is required")
 	}
 
 	// Find connection
@@ -310,15 +282,15 @@ func (h *DatabaseHandler) TestDatabaseConnection(c echo.Context) error {
 	err := h.db.Where("uid = ? AND user_id = ?", uid, user.ID).First(&conn).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return echo.NewHTTPError(http.StatusNotFound, "Database connection not found")
+			return responses.NotFound(c, "Database connection not found")
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to fetch database connection")
+		return responses.InternalError(c, "Failed to fetch database connection")
 	}
 
 	// Test connection
 	result, err := h.dbService.TestConnection(c.Request().Context(), &conn)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to test connection")
+		return responses.InternalError(c, "Failed to test connection")
 	}
 
 	// Update connection test result
@@ -327,33 +299,28 @@ func (h *DatabaseHandler) TestDatabaseConnection(c echo.Context) error {
 		c.Logger().Errorf("Failed to update connection test result: %v", err)
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"status": "success",
-		"data":   result,
-	})
+	return responses.Success(c, "Database connection test completed", result)
 }
 
 // DiscoverTables handles POST /api/databases/:uid/discover
 func (h *DatabaseHandler) DiscoverTables(c echo.Context) error {
-	user, ok := c.Get("user").(*models.User)
-	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, "User not authenticated")
-	}
+	// Get authenticated user (guaranteed to exist after auth middleware)
+	user := middleware.GetUserModel(c)
 
 	uid := c.Param("uid")
 	if uid == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Connection UID is required")
+		return responses.Error(c, http.StatusBadRequest, "Connection UID is required")
 	}
 
 	// Parse request
 	var req models.TableDiscoveryRequest
 	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+		return responses.Error(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate request
 	if err := c.Validate(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return responses.Error(c, http.StatusBadRequest, err.Error())
 	}
 
 	// Find connection
@@ -361,20 +328,20 @@ func (h *DatabaseHandler) DiscoverTables(c echo.Context) error {
 	err := h.db.Where("uid = ? AND user_id = ?", uid, user.ID).First(&conn).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return echo.NewHTTPError(http.StatusNotFound, "Database connection not found")
+			return responses.NotFound(c, "Database connection not found")
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to fetch database connection")
+		return responses.InternalError(c, "Failed to fetch database connection")
 	}
 
 	// Discover tables
 	tables, err := h.dbService.DiscoverTables(c.Request().Context(), &conn, &req)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to discover tables: "+err.Error())
+		return responses.InternalError(c, "Failed to discover tables: "+err.Error())
 	}
 
 	// Save discovered tables
 	if err := h.dbService.SaveDiscoveredTables(c.Request().Context(), tables); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to save discovered tables")
+		return responses.InternalError(c, "Failed to save discovered tables")
 	}
 
 	// Convert to public format
@@ -383,27 +350,20 @@ func (h *DatabaseHandler) DiscoverTables(c echo.Context) error {
 		publicTables[i] = table.ToPublic()
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"status": "success",
-		"data": map[string]interface{}{
-			"tables": publicTables,
-			"count":  len(tables),
-		},
-	})
+	discoveryData := map[string]interface{}{
+		"tables": publicTables,
+		"count":  len(tables),
+	}
+
+	return responses.Success(c, "Tables discovered successfully", discoveryData)
 }
 
 // DatabaseStats returns database connection statistics
 func DatabaseStats(c echo.Context) error {
 	stats, err := database.GetStats()
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error":   "Failed to get database statistics",
-			"details": err.Error(),
-		})
+		return responses.InternalError(c, "Failed to get database statistics")
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"status": "success",
-		"data":   stats,
-	})
+	return responses.Success(c, "Database statistics retrieved successfully", stats)
 }

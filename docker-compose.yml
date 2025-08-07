@@ -54,6 +54,10 @@ services:
       - GO_ENV=development
       - PORT=8080
       - LOG_LEVEL=debug
+      - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
+      - CORS_ALLOWED_METHODS=GET,POST,PUT,DELETE,OPTIONS,PATCH
+      - CORS_ALLOWED_HEADERS=Content-Type,Authorization,X-Requested-With,X-Request-ID
+      - CORS_ALLOW_CREDENTIALS=true
     ports:
       - "8080:8080"
       - "2345:2345" # Debug port

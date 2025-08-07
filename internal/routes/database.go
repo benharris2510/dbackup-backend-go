@@ -14,8 +14,8 @@ func SetupDatabaseRoutes(e *echo.Echo, db *gorm.DB, jm *auth.JWTManager, encServ
 	// Create database handler
 	dbHandler := handlers.NewDatabaseHandler(db, encService)
 
-	// Database routes group with authentication required
-	dbGroup := e.Group("/api/databases", middleware.JWT(jm))
+	// Database routes group with authentication required (cookie-based)
+	dbGroup := e.Group("/api/databases", middleware.CookieJWT(jm))
 
 	// CRUD operations for database connections
 	dbGroup.GET("", dbHandler.ListDatabaseConnections)

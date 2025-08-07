@@ -7,7 +7,10 @@ import (
 
 	"github.com/dbackup/backend-go/internal/auth"
 	"github.com/dbackup/backend-go/internal/database"
+	"github.com/dbackup/backend-go/internal/middleware"
 	"github.com/dbackup/backend-go/internal/models"
+	"github.com/dbackup/backend-go/internal/responses"
+	"github.com/dbackup/backend-go/internal/utils"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -30,45 +33,28 @@ func NewAuthHandler(jwtManager *auth.JWTManager, passwordHasher *auth.PasswordHa
 
 // RegisterRequest represents the user registration request
 type RegisterRequest struct {
-	Email                string `json:"email" validate:"required,email"`
-	Password             string `json:"password" validate:"required,min=8,max=128"`
-	PasswordConfirmation string `json:"password_confirmation" validate:"required"`
-	FirstName            string `json:"first_name" validate:"required,min=1,max=50"`
-	LastName             string `json:"last_name" validate:"required,min=1,max=50"`
-	CompanyName          string `json:"company_name,omitempty" validate:"max=100"`
-	AcceptTerms          bool   `json:"accept_terms"`
+	Email          string `json:"email" validate:"required,email"`
+	Password       string `json:"password" validate:"required,min=8,max=128"`
+	FullName       string `json:"full_name" validate:"required,min=1,max=100"`
+	CompanyName    string `json:"company_name,omitempty" validate:"max=100"`
+	AcceptTerms    bool   `json:"accept_terms"`
+	RecaptchaToken string `json:"recaptcha_token,omitempty"`
 }
 
-// RegisterResponse represents the user registration response
-type RegisterResponse struct {
-	Success bool        `json:"success"`
-	Message string      `json:"message"`
-	User    *UserPublic `json:"user,omitempty"`
-	Tokens  *TokenPair  `json:"tokens,omitempty"`
+// Temporary structs to fix compilation (will remove these with better approach)
+type RefreshResponse struct {
+	Success bool       `json:"success"`
+	Message string     `json:"message"`
+	Tokens  *TokenPair `json:"tokens,omitempty"`
 }
 
-// UserPublic represents the public user information
-type UserPublic struct {
-	ID          uint   `json:"id"`
-	UID         string `json:"uid"`
-	Email       string `json:"email"`
-	FirstName   string `json:"first_name"`
-	LastName    string `json:"last_name"`
-	CompanyName string `json:"company_name,omitempty"`
-	IsVerified  bool   `json:"is_verified"`
-	Has2FA      bool   `json:"has_2fa"`
-	CreatedAt   string `json:"created_at"`
-}
-
-// TokenPair represents access and refresh tokens
 type TokenPair struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	TokenType    string `json:"token_type"`
-	ExpiresIn    int64  `json:"expires_in"` // seconds
+	ExpiresIn    int64  `json:"expires_in"`
 }
 
-// ErrorResponse represents an error response
 type ErrorResponse struct {
 	Success bool              `json:"success"`
 	Message string            `json:"message"`
@@ -79,44 +65,40 @@ type ErrorResponse struct {
 func (h *AuthHandler) Register(c echo.Context) error {
 	var req RegisterRequest
 	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+		return responses.Error(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate request
 	if err := c.Validate(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return responses.Error(c, http.StatusBadRequest, err.Error())
 	}
 
-	// Validate password confirmation
-	if req.Password != req.PasswordConfirmation {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{
-			Success: false,
-			Message: "Validation failed",
-			Errors: map[string]string{
-				"password_confirmation": "Password confirmation does not match",
-			},
+	// Parse full name into first and last name
+	names := strings.Fields(strings.TrimSpace(req.FullName))
+	var firstName, lastName string
+	if len(names) == 0 {
+		return responses.ValidationError(c, "Full name is required", map[string]string{
+			"full_name": "Full name cannot be empty",
 		})
+	} else if len(names) == 1 {
+		firstName = names[0]
+		lastName = ""
+	} else {
+		firstName = names[0]
+		lastName = strings.Join(names[1:], " ")
 	}
 
 	// Validate password strength
 	if err := auth.ValidatePasswordStrength(req.Password); err != nil {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{
-			Success: false,
-			Message: "Password does not meet requirements",
-			Errors: map[string]string{
-				"password": err.Error(),
-			},
+		return responses.ValidationError(c, "Password does not meet requirements", map[string]string{
+			"password": err.Error(),
 		})
 	}
 
 	// Validate terms acceptance
 	if !req.AcceptTerms {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{
-			Success: false,
-			Message: "Terms and conditions must be accepted",
-			Errors: map[string]string{
-				"accept_terms": "You must accept the terms and conditions",
-			},
+		return responses.ValidationError(c, "Terms and conditions must be accepted", map[string]string{
+			"accept_terms": "You must accept the terms and conditions",
 		})
 	}
 
@@ -127,77 +109,49 @@ func (h *AuthHandler) Register(c echo.Context) error {
 	db := database.GetDB()
 	var existingUser models.User
 	if err := db.Where("email = ?", req.Email).First(&existingUser).Error; err == nil {
-		return c.JSON(http.StatusConflict, ErrorResponse{
-			Success: false,
-			Message: "User already exists",
-			Errors: map[string]string{
-				"email": "An account with this email address already exists",
-			},
+		return responses.ValidationError(c, "User already exists", map[string]string{
+			"email": "An account with this email address already exists",
 		})
 	} else if err != gorm.ErrRecordNotFound {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+		return responses.InternalError(c, "Database error")
 	}
 
 	// Hash password
 	hashedPassword, err := h.passwordHasher.HashPassword(req.Password)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process password")
+		return responses.InternalError(c, "Failed to process password")
 	}
 
 	// Create user
 	user := models.User{
 		Email:           req.Email,
 		Password:        hashedPassword,
-		FirstName:       strings.TrimSpace(req.FirstName),
-		LastName:        strings.TrimSpace(req.LastName),
+		FirstName:       firstName,
+		LastName:        lastName,
 		IsActive:        true,
 		IsEmailVerified: false, // Email verification required
 	}
 
 	// Set user before create hook will generate UID
 	if err := user.BeforeCreate(db); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create user")
+		return responses.InternalError(c, "Failed to create user")
 	}
 
 	// Save user to database
 	if err := db.Create(&user).Error; err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create user account")
+		return responses.InternalError(c, "Failed to create user account")
 	}
 
 	// Generate tokens
 	accessToken, refreshToken, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate authentication tokens")
+		return responses.InternalError(c, "Failed to generate authentication tokens")
 	}
 
-	// Prepare response
-	userPublic := &UserPublic{
-		ID:          user.ID,
-		UID:         user.UID,
-		Email:       user.Email,
-		FirstName:   user.FirstName,
-		LastName:    user.LastName,
-		CompanyName: req.CompanyName, // Use from request since not stored in user model
-		IsVerified:  user.IsEmailVerified,
-		Has2FA:      user.TwoFactorEnabled,
-		CreatedAt:   user.CreatedAt.Format("2006-01-02T15:04:05Z"),
-	}
+	// Set tokens as httpOnly cookies
+	utils.SetTokenCookies(c, accessToken, refreshToken)
 
-	tokens := &TokenPair{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		TokenType:    "Bearer",
-		ExpiresIn:    int64(h.jwtManager.GetTokenDuration(auth.TokenTypeAccess).Seconds()),
-	}
-
-	response := RegisterResponse{
-		Success: true,
-		Message: "Account created successfully. Please check your email to verify your account.",
-		User:    userPublic,
-		Tokens:  tokens,
-	}
-
-	return c.JSON(http.StatusCreated, response)
+	return responses.Created(c, "Account created successfully. Please check your email to verify your account.", &user)
 }
 
 // LoginRequest represents the user login request
@@ -209,25 +163,16 @@ type LoginRequest struct {
 	RememberMe bool   `json:"remember_me"`
 }
 
-// LoginResponse represents the user login response
-type LoginResponse struct {
-	Success   bool        `json:"success"`
-	Message   string      `json:"message"`
-	User      *UserPublic `json:"user,omitempty"`
-	Tokens    *TokenPair  `json:"tokens,omitempty"`
-	Requires2FA bool      `json:"requires_2fa,omitempty"`
-}
-
 // Login handles user authentication
 func (h *AuthHandler) Login(c echo.Context) error {
 	var req LoginRequest
 	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+		return responses.Error(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate request
 	if err := c.Validate(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return responses.Error(c, http.StatusBadRequest, err.Error())
 	}
 
 	// Normalize email
@@ -238,54 +183,43 @@ func (h *AuthHandler) Login(c echo.Context) error {
 	var user models.User
 	if err := db.Where("email = ?", req.Email).First(&user).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return c.JSON(http.StatusUnauthorized, ErrorResponse{
-				Success: false,
-				Message: "Invalid credentials",
-			})
+			return responses.Unauthorized(c, "Invalid credentials")
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+		return responses.InternalError(c, "Database error")
 	}
 
 	// Check if account is active
 	if !user.IsActive {
-		return c.JSON(http.StatusUnauthorized, ErrorResponse{
-			Success: false,
-			Message: "Account is disabled. Please contact support.",
-		})
+		return responses.Unauthorized(c, "Account is disabled. Please contact support.")
 	}
 
 	// Verify password
 	valid, err := h.passwordHasher.VerifyPassword(req.Password, user.Password)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication error")
+		return responses.InternalError(c, "Authentication error")
 	}
 
 	if !valid {
 		// Update failed login attempts
 		user.LoginAttempts++
-		
+
 		// Lock account after 5 failed attempts
 		if user.LoginAttempts >= 5 {
 			user.IsActive = false
 			lockUntil := time.Now().Add(30 * time.Minute)
 			user.LockedUntil = &lockUntil
 		}
-		
+
 		db.Save(&user)
-		
-		return c.JSON(http.StatusUnauthorized, ErrorResponse{
-			Success: false,
-			Message: "Invalid credentials",
-		})
+
+		return responses.Unauthorized(c, "Invalid credentials")
 	}
 
 	// Check 2FA if enabled
 	if user.TwoFactorEnabled {
 		if req.TOTPCode == "" && req.BackupCode == "" {
-			return c.JSON(http.StatusOK, LoginResponse{
-				Success:     false,
-				Message:     "Two-factor authentication required",
-				Requires2FA: true,
+			return responses.ErrorWithData(c, http.StatusUnauthorized, "Two-factor authentication required", map[string]interface{}{
+				"requires_2fa": true,
 			})
 		}
 
@@ -300,10 +234,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		}
 
 		if !totpValid {
-			return c.JSON(http.StatusUnauthorized, ErrorResponse{
-				Success: false,
-				Message: "Invalid two-factor authentication code",
-			})
+			return responses.Unauthorized(c, "Invalid two-factor authentication code")
 		}
 	}
 
@@ -321,7 +252,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 	// Generate tokens (with extended duration if remember me is checked)
 	var accessTokenDuration, refreshTokenDuration time.Duration
 	if req.RememberMe {
-		accessTokenDuration = 24 * time.Hour     // 24 hours
+		accessTokenDuration = 24 * time.Hour       // 24 hours
 		refreshTokenDuration = 30 * 24 * time.Hour // 30 days
 	} else {
 		accessTokenDuration = h.jwtManager.GetTokenDuration(auth.TokenTypeAccess)
@@ -340,37 +271,13 @@ func (h *AuthHandler) Login(c echo.Context) error {
 
 	accessToken, refreshToken, err := jm.GenerateTokenPair(user.ID, user.Email, nil)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate authentication tokens")
+		return responses.InternalError(c, "Failed to generate authentication tokens")
 	}
 
-	// Prepare response
-	userPublic := &UserPublic{
-		ID:          user.ID,
-		UID:         user.UID,
-		Email:       user.Email,
-		FirstName:   user.FirstName,
-		LastName:    user.LastName,
-		CompanyName: "", // Not stored in user model for this implementation
-		IsVerified:  user.IsEmailVerified,
-		Has2FA:      user.TwoFactorEnabled,
-		CreatedAt:   user.CreatedAt.Format("2006-01-02T15:04:05Z"),
-	}
+	// Set tokens as httpOnly cookies
+	utils.SetTokenCookies(c, accessToken, refreshToken)
 
-	tokens := &TokenPair{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		TokenType:    "Bearer",
-		ExpiresIn:    int64(accessTokenDuration.Seconds()),
-	}
-
-	response := LoginResponse{
-		Success: true,
-		Message: "Login successful",
-		User:    userPublic,
-		Tokens:  tokens,
-	}
-
-	return c.JSON(http.StatusOK, response)
+	return responses.Success(c, "Login successful", &user)
 }
 
 // RefreshRequest represents the token refresh request
@@ -378,131 +285,76 @@ type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token" validate:"required"`
 }
 
-// RefreshResponse represents the token refresh response
-type RefreshResponse struct {
-	Success bool       `json:"success"`
-	Message string     `json:"message"`
-	Tokens  *TokenPair `json:"tokens,omitempty"`
-}
-
 // Refresh handles token refresh
 func (h *AuthHandler) Refresh(c echo.Context) error {
 	var req RefreshRequest
 	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+		return responses.Error(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate request
 	if err := c.Validate(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return responses.Error(c, http.StatusBadRequest, err.Error())
 	}
 
 	// Validate refresh token
 	claims, err := h.jwtManager.ValidateRefreshToken(req.RefreshToken)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, ErrorResponse{
-			Success: false,
-			Message: "Invalid or expired refresh token",
-		})
+		return responses.Unauthorized(c, "Invalid or expired refresh token")
 	}
 
 	// Check if user still exists and is active
 	db := database.GetDB()
 	var user models.User
 	if err := db.Where("id = ?", claims.UserID).First(&user).Error; err != nil {
-		return c.JSON(http.StatusUnauthorized, ErrorResponse{
-			Success: false,
-			Message: "User not found",
-		})
+		return responses.Unauthorized(c, "User not found")
 	}
 
 	if !user.IsActive {
-		return c.JSON(http.StatusUnauthorized, ErrorResponse{
-			Success: false,
-			Message: "Account is disabled",
-		})
+		return responses.Unauthorized(c, "Account is disabled")
 	}
 
 	// Generate new token pair
 	accessToken, refreshToken, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, claims.TeamID)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate authentication tokens")
+		return responses.InternalError(c, "Failed to generate authentication tokens")
 	}
 
-	tokens := &TokenPair{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		TokenType:    "Bearer",
-		ExpiresIn:    int64(h.jwtManager.GetTokenDuration(auth.TokenTypeAccess).Seconds()),
+	tokens := map[string]interface{}{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"token_type":    "Bearer",
+		"expires_in":    int64(h.jwtManager.GetTokenDuration(auth.TokenTypeAccess).Seconds()),
 	}
 
-	response := RefreshResponse{
-		Success: true,
-		Message: "Token refreshed successfully",
-		Tokens:  tokens,
-	}
-
-	return c.JSON(http.StatusOK, response)
-}
-
-// SessionResponse represents the session information response
-type SessionResponse struct {
-	Success bool        `json:"success"`
-	Message string      `json:"message"`
-	User    *UserPublic `json:"user,omitempty"`
+	return responses.Success(c, "Token refreshed successfully", tokens)
 }
 
 // Session returns current user session information
 func (h *AuthHandler) Session(c echo.Context) error {
-	// Get user from context (set by auth middleware)
-	userID := c.Get("user_id")
-	if userID == nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, "Authentication required")
-	}
+	// Get authenticated user (guaranteed to exist after auth middleware)
+	user := middleware.GetUserModel(c)
 
-	// Get user from database
-	db := database.GetDB()
-	var user models.User
-	if err := db.Where("id = ?", userID).First(&user).Error; err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "User not found")
-	}
-
-	// Prepare response
-	userPublic := &UserPublic{
-		ID:          user.ID,
-		UID:         user.UID,
-		Email:       user.Email,
-		FirstName:   user.FirstName,
-		LastName:    user.LastName,
-		CompanyName: "", // Not stored in user model for this implementation
-		IsVerified:  user.IsEmailVerified,
-		Has2FA:      user.TwoFactorEnabled,
-		CreatedAt:   user.CreatedAt.Format("2006-01-02T15:04:05Z"),
-	}
-
-	response := SessionResponse{
-		Success: true,
-		Message: "Session retrieved successfully",
-		User:    userPublic,
-	}
-
-	return c.JSON(http.StatusOK, response)
-}
-
-// LogoutResponse represents the logout response
-type LogoutResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	return responses.Success(c, "Session retrieved successfully", user)
 }
 
 // Logout handles user logout (token invalidation would be handled by token revocation)
 func (h *AuthHandler) Logout(c echo.Context) error {
-	// In a full implementation, this would revoke the current token
-	// For now, we'll just return a success response
-	response := LogoutResponse{
-		Success: true,
-		Message: "Logged out successfully",
+	// Clear token cookies
+	utils.ClearTokenCookies(c)
+
+	return responses.Success(c, "Logged out successfully", nil)
+}
+
+// GetUsers returns a list of users (demo endpoint to show array serialization)
+func (h *AuthHandler) GetUsers(c echo.Context) error {
+	db := database.GetDB()
+	var users []models.User
+
+	if err := db.Limit(10).Find(&users).Error; err != nil {
+		return responses.InternalError(c, "Failed to fetch users")
 	}
 
-	return c.JSON(http.StatusOK, response)
+	// Just return the slice of models - automatic serialization handles the rest!
+	return responses.Success(c, "Users retrieved successfully", users)
 }

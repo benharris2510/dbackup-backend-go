@@ -114,13 +114,16 @@ func setupMiddleware(e *echo.Echo, cfg *config.Config, shutdownManager *server.S
 }
 
 func setupRoutes(e *echo.Echo, jm *auth.JWTManager, ph *auth.PasswordHasher, tm *auth.TOTPManager, encService *encryption.Service) {
-	// Health check
+	// Public routes (no authentication required)
 	e.GET("/health", handlers.HealthCheck)
 
-	// API group
-	api := e.Group("/api")
+	// Setup authentication routes (handles its own auth logic)
+	routes.SetupAuthRoutes(e, jm, ph, tm)
 
-	// API routes will be added here
+	// Protected API group (requires authentication)
+	api := e.Group("/api", middleware.CookieJWT(jm))
+
+	// API info endpoint (now protected)
 	api.GET("/", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{
 			"message": "dbackup API v1.0",
@@ -128,13 +131,10 @@ func setupRoutes(e *echo.Echo, jm *auth.JWTManager, ph *auth.PasswordHasher, tm 
 		})
 	})
 
-	// Database stats endpoint (for monitoring)
+	// Database stats endpoint (now protected - contains sensitive info)
 	api.GET("/db/stats", handlers.DatabaseStats)
 
-	// Setup authentication routes
-	routes.SetupAuthRoutes(e, jm, ph, tm)
-
-	// Setup database routes
+	// Setup database routes (authentication handled by route setup)
 	db := database.GetDB()
 	routes.SetupDatabaseRoutes(e, db, jm, encService)
 }

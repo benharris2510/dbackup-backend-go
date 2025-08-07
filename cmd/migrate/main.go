@@ -32,18 +32,21 @@ func main() {
 	command := os.Args[len(os.Args)-1]
 
 	// Load configuration
-	cfg, err := config.Load(*configFile)
+	cfg, err := config.Load()
 	if err != nil {
 		fmt.Printf("Error loading configuration: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Initialize database
-	db, err := database.Initialize(cfg)
+	err = database.Initialize(cfg)
 	if err != nil {
 		fmt.Printf("Error initializing database: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Get database instance
+	db := database.GetDB()
 
 	// Get absolute path for migrations directory
 	absDir, err := filepath.Abs(*migrationsDir)

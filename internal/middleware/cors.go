@@ -40,13 +40,17 @@ func CORS() echo.MiddlewareFunc {
 		}
 	}
 
-	allowCredentials := os.Getenv("CORS_ALLOW_CREDENTIALS") == "true"
+	allowCredentials := os.Getenv("CORS_ALLOW_CREDENTIALS")
+	if allowCredentials == "" {
+		allowCredentials = "true" // Default to true in development
+	}
+	allowCreds := allowCredentials == "true"
 
 	return middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins:     allowedOrigins,
 		AllowMethods:     allowedMethods,
 		AllowHeaders:     allowedHeaders,
-		AllowCredentials: allowCredentials,
+		AllowCredentials: allowCreds,
 		ExposeHeaders: []string{
 			echo.HeaderContentLength,
 			echo.HeaderXRequestID,
