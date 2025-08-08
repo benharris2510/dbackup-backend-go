@@ -27,6 +27,7 @@ func SetupDatabaseRoutes(e *echo.Echo, db *gorm.DB, jm *auth.JWTManager, encServ
 	// Database connection operations
 	dbGroup.POST("/:uid/test", dbHandler.TestDatabaseConnection)
 	dbGroup.POST("/:uid/discover", dbHandler.DiscoverTables)
+	dbGroup.GET("/:uid/tables", dbHandler.ListTables)
 
 	// Database statistics (public endpoint for health checks)
 	e.GET("/api/stats/database", handlers.DatabaseStats)

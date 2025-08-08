@@ -350,12 +350,77 @@ func (h *DatabaseHandler) DiscoverTables(c echo.Context) error {
 		publicTables[i] = table.ToPublic()
 	}
 
-	discoveryData := map[string]interface{}{
-		"tables": publicTables,
-		"count":  len(tables),
+	response := &models.TableDiscoveryResponse{
+		Tables: publicTables,
+		Count:  len(tables),
 	}
 
-	return responses.Success(c, "Tables discovered successfully", discoveryData)
+	return responses.Success(c, "Tables discovered successfully", response)
+}
+
+// ListTables handles GET /api/databases/:uid/tables
+func (h *DatabaseHandler) ListTables(c echo.Context) error {
+	// Get authenticated user (guaranteed to exist after auth middleware)
+	user := middleware.GetUserModel(c)
+
+	uid := c.Param("uid")
+	if uid == "" {
+		return responses.Error(c, http.StatusBadRequest, "Connection UID is required")
+	}
+
+	// Parse query parameters for filtering
+	includeViews, _ := strconv.ParseBool(c.QueryParam("include_views"))
+	includeSystem, _ := strconv.ParseBool(c.QueryParam("include_system"))
+	schemaPattern := c.QueryParam("schema_pattern")
+	tablePattern := c.QueryParam("table_pattern")
+
+	// Build discovery request
+	req := &models.TableDiscoveryRequest{
+		IncludeViews:  includeViews,
+		IncludeSystem: includeSystem,
+	}
+
+	if schemaPattern != "" {
+		req.SchemaPattern = &schemaPattern
+	}
+	if tablePattern != "" {
+		req.TablePattern = &tablePattern
+	}
+
+	// Find connection
+	var conn models.DatabaseConnection
+	err := h.db.Where("uid = ? AND user_id = ?", uid, user.ID).First(&conn).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return responses.NotFound(c, "Database connection not found")
+		}
+		return responses.InternalError(c, "Failed to fetch database connection")
+	}
+
+	// List tables dynamically (without saving to database)
+	tables, err := h.dbService.DiscoverTables(c.Request().Context(), &conn, req)
+	if err != nil {
+		return responses.InternalError(c, "Failed to list tables: "+err.Error())
+	}
+
+	// Convert to public format
+	publicTables := make([]*models.DatabaseTablePublic, len(tables))
+	for i, table := range tables {
+		publicTables[i] = table.ToPublic()
+	}
+
+	response := &models.TableListResponse{
+		Tables: publicTables,
+		Count:  len(tables),
+		Filters: models.TableListFilters{
+			IncludeViews:  includeViews,
+			IncludeSystem: includeSystem,
+			SchemaPattern: schemaPattern,
+			TablePattern:  tablePattern,
+		},
+	}
+
+	return responses.Success(c, "Tables listed successfully", response)
 }
 
 // DatabaseStats returns database connection statistics

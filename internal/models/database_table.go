@@ -483,6 +483,27 @@ type TableUpdateRequest struct {
 	BackupSchedule    *string `json:"backup_schedule,omitempty" validate:"omitempty,max=100"`
 }
 
+// TableListResponse represents the response for listing tables
+type TableListResponse struct {
+	Tables  []*DatabaseTablePublic `json:"tables"`
+	Count   int                    `json:"count"`
+	Filters TableListFilters       `json:"filters"`
+}
+
+// TableListFilters represents the filters applied when listing tables
+type TableListFilters struct {
+	IncludeViews  bool   `json:"include_views"`
+	IncludeSystem bool   `json:"include_system"`
+	SchemaPattern string `json:"schema_pattern,omitempty"`
+	TablePattern  string `json:"table_pattern,omitempty"`
+}
+
+// TableDiscoveryResponse represents the response for discovering and saving tables
+type TableDiscoveryResponse struct {
+	Tables []*DatabaseTablePublic `json:"tables"`
+	Count  int                    `json:"count"`
+}
+
 // ApplyUpdate applies the update request to the table
 func (dt *DatabaseTable) ApplyUpdate(req *TableUpdateRequest) {
 	if req.IsBackupEnabled != nil {
